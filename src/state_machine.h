@@ -19,6 +19,9 @@
 #define C_I0   0x00
 #define C_I1   0x40
 
+#define FSM_INFO_MAX 1024
+#define FSM_STUFFED_MAX (2*(FSM_INFO_MAX + 1))
+
 typedef enum {
     STATE_START,
     STATE_FLAG_RCV,
@@ -34,9 +37,8 @@ typedef struct {
     uint8_t address;
     uint8_t control;
     uint8_t bcc1;
-    uint8_t data[1024];
+    uint8_t data[FSM_STUFFED_MAX];
     int data_size;
-    int escape_next;
 } FrameFSM;
 
 void fsm_init(FrameFSM *fsm);

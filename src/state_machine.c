@@ -8,31 +8,16 @@
 void fsm_init(FrameFSM *fsm) {
     fsm->state = STATE_START;
     fsm->data_size = 0;
-    fsm->escape_next = 0;
 }
 
 int fsm_feed(FrameFSM *fsm, uint8_t byte) {
     if (fsm->state == STATE_STOP) return 1; 
-
-    // Byte unstuffing
-    if (fsm->escape_next) {
-        byte ^= 0x20;
-        fsm->escape_next = 0;
-        if (fsm->state == STATE_DATA || (fsm->state == STATE_BCC1_OK && IS_IFRAME(fsm->control))) {
-            if (fsm->data_size < sizeof(fsm->data)) fsm->data[fsm->data_size++] = byte;
-            return 0;
-        }
-    } else if (byte == ESC) {
-        fsm->escape_next = 1;
-        return 0;
-    }
 
     switch (fsm->state) {
         case STATE_START:
             if (byte == FLAG) {
                 fsm->state = STATE_FLAG_RCV;
                 fsm->data_size = 0;
-                fsm->escape_next = 0;
             }
             break;
 
@@ -77,7 +62,12 @@ int fsm_feed(FrameFSM *fsm, uint8_t byte) {
 
         case STATE_DATA:
             if (byte == FLAG) fsm->state = STATE_STOP;
-            else if(fsm->data_size < sizeof(fsm->data)) fsm->data[fsm->data_size++] = byte;
+            else if (fsm->data_size < (int)sizeof(fsm->data)) {
+                fsm->data[fsm->data_size++] = byte;
+            } else {
+                fsm->state = STATE_START;
+                fsm->data_size = 0;
+            }
             break;
 
         case STATE_STOP:
