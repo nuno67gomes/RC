@@ -20,11 +20,10 @@
 #define FRAME_MAX (FRAME_OVERHEAD + STUFFED_INFO_MAX)
 
 //state after llopen()
-static int g_timeout_s = 0;
-static int g_maxRetries = 0;
+static LinkLayer g_cfg;
 static unsigned char g_txNs = 0;
-static LinkLayerRole g_role = LlTx;
 static unsigned char g_rxExpectedNs = 0;
+static int g_disc_already_seen = 0;
 
 
 static void buildCtrlFrame(unsigned char *ctrlFrame, unsigned char A, unsigned char C) {
@@ -38,8 +37,8 @@ static void buildCtrlFrame(unsigned char *ctrlFrame, unsigned char A, unsigned c
 static int sendFrame(const unsigned char *frame, int frameSize, unsigned char sentControl, FrameFSM *fsm, int timeout_s, int maxRetries){
     if(!frame || frameSize <=0) return -2;
     int retry = (sentControl == C_SET) || (sentControl == C_DISC) || (sentControl == C_I0)  || (sentControl == C_I1);
-    if(!retry) return (writeBytesSerialPort(frame, frameSize) < 0) ? -2 : 0;
-    if (!fsm) return -2;
+    int want_retry = retry && (maxRetries > 0) && (fsm != NULL);
+    if(!want_retry) return (writeBytesSerialPort(frame, frameSize) < 0) ? -2 : 0;
 
     //Alarm
     static int handler_installed = 0;
@@ -115,6 +114,9 @@ static int sendFrame(const unsigned char *frame, int frameSize, unsigned char se
             }
         }
     }
+
+    alarm(0);
+    alarmEnabled = 0;
     return -1;
 }
 
@@ -132,7 +134,8 @@ int llopen(LinkLayer connectionParameters){
 
         if (r == C_UA) {
             printf("[llopen][Tx] UA received. Link established.\n");
-            g_timeout_s = connectionParameters.timeout; g_maxRetries = connectionParameters.nRetransmissions; g_role = connectionParameters.role; g_txNs = 0;
+            g_cfg = connectionParameters;
+            g_txNs = 0; g_rxExpectedNs = 0; g_disc_already_seen = 0;
             return 0;
 
         } else if (r == -1) { printf("[llopen][Tx] Timeout waiting for UA after %d attempt(s). Aborting.\n", connectionParameters.nRetransmissions);
@@ -153,12 +156,13 @@ int llopen(LinkLayer connectionParameters){
 
         while (1) {
             int rB = readByteSerialPort(&byte);
-            if (rB < 0) { printf("[llopen][Rx] Read error while waiting for SET.\n"); closeSerialPort(); return -1; }
+            if (rB < 0) { printf("[llopen][Rx] Read error while waiting for SET.\n"); closeSerialPort(); return -2; }
             if (rB == 1 && fsm_feed(&fsm, byte)) {
                 if (fsm.control == C_SET && fsm.address == A_TX) {
-                    if (sendFrame(F, 5, C_UA, NULL, 0, 1) < 0) { closeSerialPort(); return -1;}
+                    if (sendFrame(F, 5, C_UA, NULL, 0, 0) < 0) { closeSerialPort(); return -2;}
                     printf("[llopen][Rx] UA sent. Link established.\n");
-                    g_timeout_s = connectionParameters.timeout; g_maxRetries = connectionParameters.nRetransmissions; g_role = connectionParameters.role; g_txNs = 0;
+                    g_cfg = connectionParameters; 
+                    g_txNs = 0; g_rxExpectedNs = 0; g_disc_already_seen = 0;
                     return 0;
                 }
                 fsm_reset(&fsm);
@@ -197,7 +201,7 @@ static int stuffBytes(const unsigned char *f, int fLen, unsigned char *out) {
 ////////////////////////////////////////////////
 int llwrite(const unsigned char *buf, int bufSize){
     if (!buf || bufSize < 0) return -2;
-    if (g_role != LlTx) return -2;
+    if (g_cfg.role != LlTx) return -2;
     if (bufSize > INFO_MAX) return -2;
 
     const unsigned char C = (g_txNs == 0) ? C_I0 : C_I1;
@@ -226,7 +230,7 @@ int llwrite(const unsigned char *buf, int bufSize){
 
     //send frame
     FrameFSM fsm; fsm_init(&fsm);
-    int r = sendFrame(frame, k, C, &fsm, g_timeout_s, g_maxRetries);
+    int r = sendFrame(frame, k, C, &fsm, g_cfg.timeout, g_cfg.nRetransmissions);
 
     if ((g_txNs == 0 && r == C_RR1) || (g_txNs == 1 && r == C_RR0)) {
         g_txNs ^= 1;
@@ -273,7 +277,7 @@ static int sendREJ(unsigned char expectNextNr) {
 // LLREAD
 ////////////////////////////////////////////////
 int llread(unsigned char *packet){
-    if (!packet || g_role != LlRx) return -2;
+    if (!packet || g_cfg.role != LlRx) return -2;
     FrameFSM fsm; fsm_init(&fsm);
 
     while(1){
@@ -287,7 +291,7 @@ int llread(unsigned char *packet){
         const unsigned char A = fsm.address;
         const unsigned char C = fsm.control;
 
-        if (A == A_TX && C == C_DISC) return -1; // peer wants to close
+        if (A == A_TX && C == C_DISC) { g_disc_already_seen = 1; return -1; } // peer wants to close
         if (C!=C_I0 && C!=C_I1) { fsm_reset(&fsm); continue;}
         if (A != A_TX) { fsm_reset(&fsm); continue; }
         if (fsm.data_size < 1) { (void)sendREJ(g_rxExpectedNs); fsm_reset(&fsm); continue; } // messages need bbc2 min
@@ -319,9 +323,135 @@ int llread(unsigned char *packet){
 ////////////////////////////////////////////////
 // LLCLOSE
 ////////////////////////////////////////////////
-int llclose()
-{
-    // TODO: Implement this function
+int llclose() {
+    // The logic here:
+    // Tx: send DISC -> wait DISC -> send UA -> close
+    // Rx: wait DISC -> send DISC -> wait UA -> close
 
-    return 0;
+    // TRANSMITTER
+    if (g_cfg.role == LlTx) {
+        unsigned char disc[5];
+        buildCtrlFrame(disc, A_TX, C_DISC);
+
+        FrameFSM fsm;
+        fsm_init(&fsm);
+
+        int r = sendFrame(disc, 5, C_DISC, &fsm, g_cfg.timeout, g_cfg.nRetransmissions);
+        if (r == C_DISC) {
+            // Other guy answered DISC; send final UA
+            unsigned char ua[5];
+            buildCtrlFrame(ua, A_TX, C_UA);
+            if (sendFrame(ua, 5, C_UA, NULL, 0, 1) < 0) {
+                printf("[llclose][Tx] Error sending UA.\n");
+                closeSerialPort();
+                return -2;
+            }
+            printf("[llclose][Tx] DISC↔DISC completed. UA sent. Link closed.\n");
+            closeSerialPort();
+            g_txNs = 0; g_rxExpectedNs = 0; g_disc_already_seen = 0;
+            return 0;
+        }
+
+        if (r == C_UA) {
+            // Some peers may directly reply UA; accept and close
+            printf("[llclose][Tx] UA received after DISC. Link closed.\n");
+            closeSerialPort();
+            g_txNs = 0; g_rxExpectedNs = 0; g_disc_already_seen = 0;
+            return 0;
+        }
+
+        if (r == -2) {
+            printf("[llclose][Tx] I/O error during close.\n");
+            closeSerialPort();
+            return -2;
+        }
+
+        printf("[llclose][Tx] Timeout or unexpected control 0x%02X during close.\n", r & 0xFF);
+        closeSerialPort();
+        return -1;
+    }
+
+    // RECEIVER
+    if (g_cfg.role == LlRx) {
+        // Wait for DISC from the transmitter
+        FrameFSM fsm;
+        fsm_init(&fsm);
+
+        // If llread already saw DISC, skip waiting and answer now.
+        if (g_disc_already_seen) {
+            unsigned char disc[5];
+            buildCtrlFrame(disc, A_RX, C_DISC);
+            if (sendFrame(disc, 5, C_DISC, NULL, 0, 0) < 0) {
+                printf("[llclose][Rx] Error sending DISC.\n");
+                closeSerialPort();
+                return -2;
+            }
+
+            // Wait for final UA from Tx
+            unsigned char byte;
+            fsm_reset(&fsm);
+            while (1) {
+                int rb = readByteSerialPort(&byte);
+                if (rb < 0) { printf("[llclose][Rx] Read error while waiting for UA.\n"); closeSerialPort(); return -2; }
+                if (rb == 1 && fsm_feed(&fsm, byte)) {
+                    if (fsm.control == C_UA && fsm.address == A_TX) {
+                        printf("[llclose][Rx] UA received. Link closed.\n");
+                        closeSerialPort();
+                        g_txNs = 0; g_rxExpectedNs = 0; g_disc_already_seen = 0;
+                        return 0;
+                    }
+                    fsm_reset(&fsm);
+                }
+            }
+        }
+
+
+        unsigned char byte;
+        while (1) {
+            int rb = readByteSerialPort(&byte);
+            if (rb < 0) {
+                printf("[llclose][Rx] Read error while waiting for DISC.\n");
+                closeSerialPort();
+                return -2;
+            }
+            if (rb == 1 && fsm_feed(&fsm, byte)) {
+                if (fsm.control == C_DISC && fsm.address == A_TX) {
+                    // Reply with DISC
+                    unsigned char disc[5];
+                    buildCtrlFrame(disc, A_RX, C_DISC);
+                    if (sendFrame(disc, 5, C_DISC, NULL, 0, 0) < 0) {
+                        printf("[llclose][Rx] Error sending DISC.\n");
+                        closeSerialPort();
+                        return -2;
+                    }
+
+                    // Now wait for final UA from Tx
+                    fsm_reset(&fsm);
+                    while (1) {
+                        rb = readByteSerialPort(&byte);
+                        if (rb < 0) {
+                            printf("[llclose][Rx] Read error while waiting for UA.\n");
+                            closeSerialPort();
+                            return -2;
+                        }
+                        if (rb == 1 && fsm_feed(&fsm, byte)) {
+                            if (fsm.control == C_UA && fsm.address == A_TX) {
+                                printf("[llclose][Rx] UA received. Link closed.\n");
+                                closeSerialPort();
+                                g_txNs = 0; g_rxExpectedNs = 0; g_disc_already_seen = 0;
+                                return 0;
+                            }
+                            // Unexpected frame, so reset and keep waiting
+                            fsm_reset(&fsm);
+                        }
+                    }
+                }
+                // Not DISC; reset state machine and continue waiting
+                fsm_reset(&fsm);
+            }
+        }
+    }
+
+    closeSerialPort();
+    return -1;
 }

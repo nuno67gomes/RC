@@ -113,7 +113,7 @@ static int sendDataPacket(uint8_t seq, const unsigned char *payload, uint16_t le
     unsigned char frame[APP_DATA_HDR_SIZE + APP_CHUNK];
     int n = buildDataPacket(frame, seq, payload, len);
     if (n < 0) return -1;
-    //hexdump("TX DATA", frame, (size_t)n);
+    hexdump("TX DATA", frame, (size_t)n);
     int r = llwrite(frame, n);
     return (r < 0) ? -1 : (int)len;
 }
