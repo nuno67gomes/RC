@@ -42,8 +42,22 @@ Instructions to Run the Project
 
 
 TODO:
-X 1. llclose 
-X 2. in link_layer.c start using struct LinkLayer
-  3. file name colision
-  4. printf either def DEGUG or write to a file
-  5. statistics
+  transmissions  3
+
+  link_layer
+  1. statistics (n de tramas , sucessos , duplicadas, erros, transmission duration)
+  2. verify when reciving response ignore if not RR or REJ
+  3. change Receiver response to A_TX
+  4. when RX send DIX its a command so change adress to 0x01
+  5. verify closing sequence TX disc - RX disc - TX UA
+
+  no idea
+  1. why is it not closing on reciver end 
+
+
+DONE:
+  apllication_layer
+  1. change to little endian of the fileSze info size indicator 
+  2. apllication layer when reciving END ceck match byteSTART == byteEND == byteReceived
+  3. remove seq number from apllication layer
+  4. not saving START file name correctly

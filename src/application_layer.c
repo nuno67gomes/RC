@@ -22,7 +22,7 @@
 #define CTRL_END 0x03
 
 #define APP_MAX_INFO_LEN 1024
-#define APP_DATA_HDR_SIZE 4
+#define APP_DATA_HDR_SIZE 3 
 #define APP_CHUNK (APP_MAX_INFO_LEN - APP_DATA_HDR_SIZE)
 
 static void hexdump(const char *tag, const unsigned char *b, size_t n){
@@ -31,25 +31,32 @@ static void hexdump(const char *tag, const unsigned char *b, size_t n){
     putchar('\n');
 }
 
+static void put_u64_be(uint8_t out[8], uint64_t v){
+  for (int i=7; i>=0; --i) { out[i] = (uint8_t)(v & 0xFF); v >>= 8; }
+}
+
+static uint64_t get_u64_be(const uint8_t in[8]){
+  uint64_t v=0; for (int i=0;i<8;++i){ v=(v<<8)|in[i]; } return v;
+}
+
+
 
 // START / END
 
 static int buildStartEnd(unsigned char *out, uint8_t ctrl, const char *fname, off_t fsize) {
     if (!out || !fname) return -1;
 
-    char sizeStr[32];
-    snprintf(sizeStr, sizeof(sizeStr), "%lld", (long long)fsize);
-
     size_t nameLen = strlen(fname);
-    size_t sizeLen = strlen(sizeStr);
     if (nameLen > 255) nameLen = 255;
-    if (sizeLen > 255) sizeLen = 255;
 
     size_t i = 0;
     out[i++] = ctrl;
 
-    out[i++] = (uint8_t)T_FILE_SIZE; out[i++] = (uint8_t)sizeLen;
-    memcpy(&out[i], sizeStr, sizeLen); i += sizeLen;
+    out[i++] = (uint8_t)T_FILE_SIZE; 
+    out[i++] = 8;
+    uint8_t sz[8]; 
+    put_u64_be(sz, (uint64_t)fsize);
+    memcpy(&out[i], sz, 8); i += 8;
 
     out[i++] = (uint8_t)T_FILE_NAME; out[i++] = (uint8_t)nameLen;
     memcpy(&out[i], fname, nameLen);  i += nameLen;
@@ -79,11 +86,8 @@ static int parseStartEnd(const unsigned char *in, size_t inLen, off_t *outSize, 
         if (i + L > inLen) break;
 
         if (T == T_FILE_SIZE) {
-            char tmp[64];
-            size_t c = (L < sizeof(tmp) - 1) ? L : sizeof(tmp) - 1;
-            memcpy(tmp, &in[i], c); tmp[c] = '\0';
-            long long v = strtoll(tmp, NULL, 10);
-            if (v < 0) v = 0;
+            if (L != 8) return -1;
+            uint64_t v = get_u64_be(&in[i]);
             *outSize = (off_t)v; haveSize = 1;
         } else if (T == T_FILE_NAME) {
             size_t c = (L < outNameCap - 1) ? L : (outNameCap - 1);
@@ -97,34 +101,32 @@ static int parseStartEnd(const unsigned char *in, size_t inLen, off_t *outSize, 
 
 // PACKET
 
-static int buildDataPacket(unsigned char *dst, uint8_t seq, const unsigned char *payload, uint16_t len) {
+static int buildDataPacket(unsigned char *dst, const unsigned char *payload, uint16_t len) {
     if (!dst || !payload) return -1;
     if (len > APP_CHUNK) return -1;
     dst[0] = CTRL_DATA;
-    dst[1] = seq;
-    dst[2] = (uint8_t)((len >> 8) & 0xFF);
-    dst[3] = (uint8_t)( len       & 0xFF);
-    memcpy(&dst[4], payload, len);
+    dst[1] = (uint8_t)((len >> 8) & 0xFF);
+    dst[2] = (uint8_t)( len & 0xFF);
+    memcpy(&dst[3], payload, len);
     return APP_DATA_HDR_SIZE + (int)len;
 }
 
-static int sendDataPacket(uint8_t seq, const unsigned char *payload, uint16_t len) {
+static int sendDataPacket(const unsigned char *payload, uint16_t len) {
     if (!payload || len > APP_CHUNK) return -1;
     unsigned char frame[APP_DATA_HDR_SIZE + APP_CHUNK];
-    int n = buildDataPacket(frame, seq, payload, len);
+    int n = buildDataPacket(frame, payload, len);
     if (n < 0) return -1;
     hexdump("TX DATA", frame, (size_t)n);
     int r = llwrite(frame, n);
     return (r < 0) ? -1 : (int)len;
 }
 
-static int parseDataPacket(const unsigned char *src, size_t srcLen, uint8_t *seq, const unsigned char **payload, uint16_t *len) {
-    if (!src || srcLen < APP_DATA_HDR_SIZE || !seq || !payload || !len) return -1;
+static int parseDataPacket(const unsigned char *src, size_t srcLen, const unsigned char **payload, uint16_t *len) {
+    if (!src || srcLen < APP_DATA_HDR_SIZE || !payload || !len) return -1;
     if (src[0] != CTRL_DATA) return -1;
-    *seq = src[1];
-    *len = ((uint16_t)src[2] << 8) | (uint16_t)src[3];
+    *len = ((uint16_t)src[1] << 8) | (uint16_t)src[2];
     if ((size_t)APP_DATA_HDR_SIZE + *len > srcLen) return -1;
-    *payload = &src[4];
+    *payload = &src[3];
     return 0;
 }
 
@@ -159,25 +161,21 @@ void applicationLayer(const char *serialPort, const char *role, int baudRate, in
         if (sendStartEnd(CTRL_START, filename, fsize) != 0) { 
             printf("[APP][Tx] failed to send START\n");
             close(fd);
-            llclose();
-            return;
+            llclose(); return;
         }
 
         // READ FILE
         unsigned char chunk[APP_CHUNK];
-        uint8_t seq = 0;
         ssize_t rd;
         off_t sent = 0;
 
         while ((rd = read(fd, chunk, sizeof(chunk))) > 0) {
-            if (sendDataPacket(seq, chunk, (uint16_t)rd) < 0) {
-                printf("[APP][Tx] failed to send DATA (seq=%u)\n", seq);
+            if (sendDataPacket(chunk, (uint16_t)rd) < 0) {
+                printf("[APP][Tx] failed to send DATA \n");
                 close(fd);
-                llclose();
-                return;
+                llclose(); return;
             }
             sent += rd;
-            seq = (uint8_t)((seq + 1) & 0xFF);
         }
 
         if (rd < 0) { perror("[APP][Tx] read"); close(fd); llclose(); return; }
@@ -186,8 +184,7 @@ void applicationLayer(const char *serialPort, const char *role, int baudRate, in
         if (sendStartEnd(CTRL_END, filename, fsize) != 0) {
             printf("[APP][Tx] failed to send END\n");
             close(fd);
-            llclose();
-            return;
+            llclose(); return;
         }
 
         printf("[APP][Tx] Done. Sent %lld bytes.\n", (long long)sent);
@@ -204,7 +201,6 @@ void applicationLayer(const char *serialPort, const char *role, int baudRate, in
         char name_from_start[512] = {0};
         int have_start = 0;
         int out_fd = -1;
-        uint8_t expected_seq = 0;
 
         while(1){
 
@@ -213,8 +209,7 @@ void applicationLayer(const char *serialPort, const char *role, int baudRate, in
             if (n < 0) {
                 printf("[APP][Rx] llread error (%d)\n", n);
                 if (out_fd >= 0) close(out_fd);
-                llclose();
-                return;
+                llclose(); return;
             }
             if (n == 0) continue;
 
@@ -229,8 +224,7 @@ void applicationLayer(const char *serialPort, const char *role, int baudRate, in
                 if (parseStartEnd(packet, (size_t)n, &size_tmp, name_tmp, sizeof(name_tmp)) != 0) {
                     printf("[APP][Rx] malformed START\n");
                     if (out_fd >= 0) close(out_fd);
-                    llclose();
-                    return;
+                    llclose(); return;
                 }
 
                 if (have_start) { printf("[APP][Rx] duplicate START ignored\n"); continue;}
@@ -241,13 +235,11 @@ void applicationLayer(const char *serialPort, const char *role, int baudRate, in
                 out_fd = open(target, O_CREAT | O_TRUNC | O_WRONLY, 0644);
                 if (out_fd < 0) {
                     perror("[APP][Rx] open(out)");
-                    llclose();
-                    return;
+                    llclose(); return;
                 }
 
-                strncpy(name_from_start, target, sizeof(name_from_start) - 1);
+                strncpy(name_from_start, name_tmp, sizeof(name_from_start) - 1);
                 received = 0;
-                expected_seq = 0;
                 have_start = 1;
 
                 printf("[APP][Rx] START ok. name=\"%s\" size=%lld\n", name_from_start, (long long)expected_size);
@@ -257,24 +249,13 @@ void applicationLayer(const char *serialPort, const char *role, int baudRate, in
             if (ctrl == CTRL_DATA) {
                 if (!have_start) { printf("[APP][Rx] DATA before START dropping\n"); continue; }
 
-                const unsigned char *payload = NULL;
-                uint16_t len = 0;
-                uint8_t seq = 0;
+                const unsigned char *payload = NULL; uint16_t len = 0;
 
                 // PARSE DATA
-                if (parseDataPacket(packet, (size_t)n, &seq, &payload, &len) != 0) {
+                if (parseDataPacket(packet, (size_t)n, &payload, &len) != 0) {
                     printf("[APP][Rx] malformed DATA\n");
                     if (out_fd >= 0) close(out_fd);
-                    llclose();
-                    return;
-                }
-
-                // CHECK SEQ
-                if (seq != expected_seq) {
-                    printf("[APP][Rx] WARN: expected seq=%u got=%u — resyncing\n", expected_seq, seq);
-                    expected_seq = (uint8_t)(seq + 1);
-                } else {
-                    expected_seq = (uint8_t)(expected_seq + 1);
+                    llclose(); return;
                 }
 
                 // WRITE TO FILE
@@ -282,10 +263,15 @@ void applicationLayer(const char *serialPort, const char *role, int baudRate, in
                 if (wr != (ssize_t)len) {
                     perror("[APP][Rx] write");
                     if (out_fd >= 0) close(out_fd);
-                    llclose();
-                    return;
+                    llclose(); return;
                 }
                 received += len;
+
+                if (expected_size && received > expected_size) {
+                    printf("[APP][Rx] ERROR: received more bytes (%lld) than expected (%lld)\n", (long long)received, (long long)expected_size);
+                    if (out_fd >= 0) close(out_fd);
+                    llclose(); return;
+                }
             }
 
             // END
@@ -299,10 +285,17 @@ void applicationLayer(const char *serialPort, const char *role, int baudRate, in
                 if (parseStartEnd(packet, (size_t)n, &size_chk, name_chk, sizeof(name_chk)) != 0) {
                     printf("[APP][Rx] malformed END\n");
                     if (out_fd >= 0) close(out_fd);
-                    llclose();
-                    return;
+                    llclose(); return;
                 }
 
+                // END size matches START size
+                if (size_chk != expected_size) {
+                    printf("[APP][Rx] ERROR: END size (%lld) != START size (%lld)\n", (long long)size_chk, (long long)expected_size);
+                    if (out_fd >= 0) close(out_fd);
+                    llclose(); return;
+                }
+
+                // OUT FILE PROBLEM
                 if (out_fd >= 0) {
                     if (fsync(out_fd) != 0) perror("[APP][Rx] fsync");
                     close(out_fd);
