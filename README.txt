@@ -43,14 +43,8 @@ Instructions to Run the Project
 
 TODO:
   transmissions  3
-
-  link_layer
-  1. statistics (n de tramas , sucessos , duplicadas, erros, transmission duration)
-  2. verify when reciving response ignore if not RR or REJ
-  3. change Receiver response to A_TX
-  4. when RX send DIX its a command so change adress to 0x01
-  5. verify closing sequence TX disc - RX disc - TX UA
-
+  statistics (n de tramas , sucessos , duplicadas, erros, transmission duration)
+  
   no idea
   1. why is it not closing on reciver end 
 
@@ -61,3 +55,9 @@ DONE:
   2. apllication layer when reciving END ceck match byteSTART == byteEND == byteReceived
   3. remove seq number from apllication layer
   4. not saving START file name correctly
+
+  link_layer
+  2. verify when reciving response ignore if not RR or REJ
+  3. change Receiver response to A_TX
+  4. when RX send DISC its a command so change adress to A_RX
+  5. verify closing sequence TX disc - RX disc - TX UA

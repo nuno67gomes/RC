@@ -75,7 +75,7 @@ static int sendFrame(const unsigned char *frame, int frameSize, unsigned char se
                 //Handshake
                 if(!isI){
                     if(sentControl== C_SET){
-                        if(cReceived== C_UA  && aReceived == A_RX ){
+                        if(cReceived== C_UA  && aReceived == A_TX ){
                             alarm(0); alarmEnabled = 0;
                             return cReceived;
                         }
@@ -87,7 +87,7 @@ static int sendFrame(const unsigned char *frame, int frameSize, unsigned char se
                         }
                         fsm_reset(fsm);
                     }else {
-                        if(cReceived== C_UA  && aReceived == A_RX){
+                        if(cReceived== C_UA  && aReceived == A_TX){
                             alarm(0); alarmEnabled = 0;
                             return cReceived;
                         }
@@ -97,15 +97,15 @@ static int sendFrame(const unsigned char *frame, int frameSize, unsigned char se
 
                 //I-Frame
                 if(isI){
-                    if (cReceived == expected_rr  && aReceived == A_RX) {
+                    if (cReceived == expected_rr  && aReceived == A_TX) {
                         alarm(0); alarmEnabled = 0;
                         return cReceived;
                     }
-                    else if (cReceived == C_REJ0 || cReceived == C_REJ1) {
+                    else if ((cReceived == C_REJ0 || cReceived == C_REJ1) && aReceived == A_TX) {
                         alarm(0); alarmEnabled = 0;
                         break;
                     }
-                    if (cReceived == C_DISC) {
+                    if (cReceived == C_DISC && aReceived == A_RX) {
                         alarm(0); alarmEnabled = 0;
                         return -1;
                     }
@@ -150,7 +150,7 @@ int llopen(LinkLayer connectionParameters){
     
     //Receiver
     if (connectionParameters.role == LlRx) {
-        unsigned char F[5]; buildCtrlFrame(F, A_RX, C_UA);
+        unsigned char F[5]; buildCtrlFrame(F, A_TX, C_UA);
         FrameFSM fsm; fsm_init(&fsm);
         unsigned char byte;
 
@@ -262,13 +262,13 @@ static int destuffBytes(const unsigned char *in, int n, unsigned char *out, int 
 
 static int sendRR(unsigned char expectNextNr) {
     unsigned char rrC = (expectNextNr == 0) ? C_RR0 : C_RR1;
-    unsigned char f[5]; buildCtrlFrame(f, A_RX, rrC);
+    unsigned char f[5]; buildCtrlFrame(f, A_TX, rrC);
     return sendFrame(f, 5, rrC, NULL, 0, 0);
 }
 
 static int sendREJ(unsigned char expectNextNr) {
     unsigned char rejC = (expectNextNr == 0) ? C_REJ0 : C_REJ1;
-    unsigned char f[5]; buildCtrlFrame(f, A_RX, rejC);
+    unsigned char f[5]; buildCtrlFrame(f, A_TX, rejC);
     printf("[DEBUG] Reject sent \n");
     return sendFrame(f, 5, rejC, NULL, 0, 0);
 }
@@ -340,7 +340,7 @@ int llclose() {
         if (r == C_DISC) {
             // Other guy answered DISC; send final UA
             unsigned char ua[5];
-            buildCtrlFrame(ua, A_TX, C_UA);
+            buildCtrlFrame(ua, A_RX, C_UA);
             if (sendFrame(ua, 5, C_UA, NULL, 0, 1) < 0) {
                 printf("[llclose][Tx] Error sending UA.\n");
                 closeSerialPort();
@@ -394,7 +394,7 @@ int llclose() {
                 int rb = readByteSerialPort(&byte);
                 if (rb < 0) { printf("[llclose][Rx] Read error while waiting for UA.\n"); closeSerialPort(); return -2; }
                 if (rb == 1 && fsm_feed(&fsm, byte)) {
-                    if (fsm.control == C_UA && fsm.address == A_TX) {
+                    if (fsm.control == C_UA && fsm.address == A_RX) {
                         printf("[llclose][Rx] UA received. Link closed.\n");
                         closeSerialPort();
                         g_txNs = 0; g_rxExpectedNs = 0; g_disc_already_seen = 0;
@@ -435,7 +435,7 @@ int llclose() {
                             return -2;
                         }
                         if (rb == 1 && fsm_feed(&fsm, byte)) {
-                            if (fsm.control == C_UA && fsm.address == A_TX) {
+                            if (fsm.control == C_UA && fsm.address == A_RX) {
                                 printf("[llclose][Rx] UA received. Link closed.\n");
                                 closeSerialPort();
                                 g_txNs = 0; g_rxExpectedNs = 0; g_disc_already_seen = 0;
