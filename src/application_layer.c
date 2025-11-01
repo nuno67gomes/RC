@@ -116,7 +116,7 @@ static int sendDataPacket(const unsigned char *payload, uint16_t len) {
     unsigned char frame[APP_DATA_HDR_SIZE + APP_CHUNK];
     int n = buildDataPacket(frame, payload, len);
     if (n < 0) return -1;
-    hexdump("TX DATA", frame, (size_t)n);
+    //hexdump("TX DATA", frame, (size_t)n);
     int r = llwrite(frame, n);
     return (r < 0) ? -1 : (int)len;
 }
@@ -132,7 +132,6 @@ static int parseDataPacket(const unsigned char *src, size_t srcLen, const unsign
 
 
 // APLICATION
-
 
 void applicationLayer(const char *serialPort, const char *role, int baudRate, int nTries, int timeout, const char *filename){
     LinkLayer ll = {0};

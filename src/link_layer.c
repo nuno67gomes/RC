@@ -12,6 +12,7 @@
 #include "serial_port.h"
 #include "timer.h"
 #include "state_machine.h"
+#include "stats.h"
 
 #define INFO_MAX 1024
 #define FRAME_OVERHEAD 5 // FLAG,A,C,BCC1,FLAG
@@ -38,7 +39,12 @@ static int sendFrame(const unsigned char *frame, int frameSize, unsigned char se
     if(!frame || frameSize <=0) return -2;
     int retry = (sentControl == C_SET) || (sentControl == C_DISC) || (sentControl == C_I0)  || (sentControl == C_I1);
     int want_retry = retry && (maxRetries > 0) && (fsm != NULL);
-    if(!want_retry) return (writeBytesSerialPort(frame, frameSize) < 0) ? -2 : 0;
+    if(!want_retry){
+        if (writeBytesSerialPort(frame, frameSize) < 0) return -2;
+        stats_frame_sent();
+        stats_tx_ctrl_sent();
+        return 0;
+    }
 
     //Alarm
     static int handler_installed = 0;
@@ -60,6 +66,11 @@ static int sendFrame(const unsigned char *frame, int frameSize, unsigned char se
     for (int tries = 0; tries < maxRetries; ++tries) {
         printf("[DEBUG] Sending C=0x%02X, try #%d\n", sentControl, tries + 1);
         if (writeBytesSerialPort(frame, frameSize) < 0) return -2;
+        
+        stats_frame_sent();
+        if (isI) { stats_tx_i_sent(); if (tries > 0) stats_tx_i_retr();} 
+        else { stats_tx_ctrl_sent(); if (tries > 0) stats_tx_ctrl_retr();}
+
         alarmEnabled = 1;
         alarm(timeout_s);
         fsm_reset(fsm);
@@ -76,18 +87,22 @@ static int sendFrame(const unsigned char *frame, int frameSize, unsigned char se
                 if(!isI){
                     if(sentControl== C_SET){
                         if(cReceived== C_UA  && aReceived == A_TX ){
+                            stats_tx_ctrl_ua_rx();
                             alarm(0); alarmEnabled = 0;
                             return cReceived;
                         }
                         fsm_reset(fsm);
                     }else if(sentControl== C_DISC){
                         if((cReceived== C_DISC && aReceived == A_RX) || (cReceived== C_UA && aReceived == A_TX)){
+                            stats_tx_ctrl_ua_rx();
+                            if (cReceived == C_UA) stats_tx_ctrl_ua_rx();
                             alarm(0); alarmEnabled = 0;
                             return cReceived;
                         }
                         fsm_reset(fsm);
                     }else {
                         if(cReceived== C_UA  && aReceived == A_TX){
+                            stats_tx_ctrl_ua_rx();
                             alarm(0); alarmEnabled = 0;
                             return cReceived;
                         }
@@ -98,10 +113,12 @@ static int sendFrame(const unsigned char *frame, int frameSize, unsigned char se
                 //I-Frame
                 if(isI){
                     if (cReceived == expected_rr  && aReceived == A_TX) {
+                        stats_tx_i_acked();
                         alarm(0); alarmEnabled = 0;
                         return cReceived;
                     }
                     else if ((cReceived == C_REJ0 || cReceived == C_REJ1) && aReceived == A_TX) {
+                        stats_tx_i_rej_rx();
                         alarm(0); alarmEnabled = 0;
                         break;
                     }
@@ -113,6 +130,7 @@ static int sendFrame(const unsigned char *frame, int frameSize, unsigned char se
                 }
             }
         }
+        if (!fsm_is_done(fsm) && alarmCount > 0) {stats_alarm();}
     }
 
     alarm(0);
@@ -125,7 +143,7 @@ static int sendFrame(const unsigned char *frame, int frameSize, unsigned char se
 ////////////////////////////////////////////////
 int llopen(LinkLayer connectionParameters){
     if (openSerialPort(connectionParameters.serialPort, connectionParameters.baudRate) < 0) return -2;
-
+    stats_start(connectionParameters.role);
     //Transmitter
     if (connectionParameters.role == LlTx) {
         unsigned char F[5]; buildCtrlFrame(F, A_TX, C_SET);
@@ -159,6 +177,9 @@ int llopen(LinkLayer connectionParameters){
             if (rB < 0) { printf("[llopen][Rx] Read error while waiting for SET.\n"); closeSerialPort(); return -2; }
             if (rB == 1 && fsm_feed(&fsm, byte)) {
                 if (fsm.control == C_SET && fsm.address == A_TX) {
+                    stats_frame_recv();
+                    stats_rx_ctrl_seen();
+                    stats_rx_ctrl_ok();
                     if (sendFrame(F, 5, C_UA, NULL, 0, 0) < 0) { closeSerialPort(); return -2;}
                     printf("[llopen][Rx] UA sent. Link established.\n");
                     g_cfg = connectionParameters; 
@@ -276,7 +297,7 @@ static int sendREJ(unsigned char expectNextNr) {
 ////////////////////////////////////////////////
 // LLREAD
 ////////////////////////////////////////////////
-int llread(unsigned char *packet){
+int llread(unsigned char *packet){  
     if (!packet || g_cfg.role != LlRx) return -2;
     FrameFSM fsm; fsm_init(&fsm);
 
@@ -287,6 +308,7 @@ int llread(unsigned char *packet){
         if (r == 0) continue;
 
         if (!fsm_feed(&fsm, byte)) continue;
+        stats_frame_recv();
 
         const unsigned char A = fsm.address;
         const unsigned char C = fsm.control;
@@ -294,23 +316,25 @@ int llread(unsigned char *packet){
         if (A == A_TX && C == C_DISC) { g_disc_already_seen = 1; return -1; } // peer wants to close
         if (C!=C_I0 && C!=C_I1) { fsm_reset(&fsm); continue;}
         if (A != A_TX) { fsm_reset(&fsm); continue; }
-        if (fsm.data_size < 1) { (void)sendREJ(g_rxExpectedNs); fsm_reset(&fsm); continue; } // messages need bbc2 min
-        if (fsm.data_size > STUFFED_INFO_MAX) { (void)sendREJ(g_rxExpectedNs); fsm_reset(&fsm); continue; }
+        stats_rx_i_seen();
+        if (fsm.data_size < 1) { stats_rx_i_rej_tx(); (void)sendREJ(g_rxExpectedNs); fsm_reset(&fsm); continue; } // messages need bbc2 min
+        if (fsm.data_size > STUFFED_INFO_MAX) { stats_rx_i_rej_tx(); (void)sendREJ(g_rxExpectedNs); fsm_reset(&fsm); continue; }
 
         unsigned char destuffed[INFO_MAX + 1];
         int m = destuffBytes(fsm.data, fsm.data_size, destuffed, (int)sizeof(destuffed));
-        if (m < 1) { (void)sendREJ(g_rxExpectedNs); fsm_reset(&fsm); continue; }
+        if (m < 1) { stats_rx_i_rej_tx(); (void)sendREJ(g_rxExpectedNs); fsm_reset(&fsm); continue; }
 
         const int payload_len = m - 1;
         const unsigned char bcc2_rx   = destuffed[m - 1];
         const unsigned char bcc2_calc = compute_bcc2(destuffed, payload_len);
-        if (bcc2_rx != bcc2_calc) { (void)sendREJ(g_rxExpectedNs); fsm_reset(&fsm); continue; }
+        if (bcc2_rx != bcc2_calc) { stats_rx_i_rej_tx(); (void)sendREJ(g_rxExpectedNs); fsm_reset(&fsm); continue; }
 
         const unsigned char ns = (C == C_I0) ? 0 : 1;
-        if (ns != g_rxExpectedNs) { (void)sendRR(g_rxExpectedNs); fsm_reset(&fsm); continue; } //Duplicate or out-of-order
+        if (ns != g_rxExpectedNs) { stats_rx_i_dup(); (void)sendRR(g_rxExpectedNs); fsm_reset(&fsm); continue; } //Duplicate or out-of-order
         
         if (payload_len > 0) memcpy(packet, destuffed, payload_len);
 
+        stats_rx_i_ok();
         (void)sendRR(g_rxExpectedNs ^ 1);
         g_rxExpectedNs ^= 1;
         return payload_len;
@@ -349,6 +373,7 @@ int llclose() {
             printf("[llclose][Tx] DISC↔DISC completed. UA sent. Link closed.\n");
             closeSerialPort();
             g_txNs = 0; g_rxExpectedNs = 0; g_disc_already_seen = 0;
+            stats_print();
             return 0;
         }
 
@@ -357,6 +382,7 @@ int llclose() {
             printf("[llclose][Tx] UA received after DISC. Link closed.\n");
             closeSerialPort();
             g_txNs = 0; g_rxExpectedNs = 0; g_disc_already_seen = 0;
+            stats_print();
             return 0;
         }
 
@@ -395,9 +421,13 @@ int llclose() {
                 if (rb < 0) { printf("[llclose][Rx] Read error while waiting for UA.\n"); closeSerialPort(); return -2; }
                 if (rb == 1 && fsm_feed(&fsm, byte)) {
                     if (fsm.control == C_UA && fsm.address == A_RX) {
+                        stats_frame_recv();
+                        stats_rx_ctrl_seen();
+                        stats_rx_ctrl_ok();
                         printf("[llclose][Rx] UA received. Link closed.\n");
                         closeSerialPort();
                         g_txNs = 0; g_rxExpectedNs = 0; g_disc_already_seen = 0;
+                        stats_print();
                         return 0;
                     }
                     fsm_reset(&fsm);
@@ -436,9 +466,13 @@ int llclose() {
                         }
                         if (rb == 1 && fsm_feed(&fsm, byte)) {
                             if (fsm.control == C_UA && fsm.address == A_RX) {
+                                stats_frame_recv();
+                                stats_rx_ctrl_seen();
+                                stats_rx_ctrl_ok();
                                 printf("[llclose][Rx] UA received. Link closed.\n");
                                 closeSerialPort();
                                 g_txNs = 0; g_rxExpectedNs = 0; g_disc_already_seen = 0;
+                                stats_print();
                                 return 0;
                             }
                             // Unexpected frame, so reset and keep waiting
