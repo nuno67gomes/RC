@@ -397,32 +397,33 @@ int llclose() {
         if (g_disc_already_seen) {
             unsigned char disc[5];
             buildCtrlFrame(disc, A_RX, C_DISC);
-            if (sendFrame(disc, 5, C_DISC, NULL, 0, 0) < 0) {
-                printf("[llclose][Rx] Error sending DISC.\n");
+
+            int r = sendFrame(disc, 5, C_DISC, &fsm, g_cfg.timeout, g_cfg.nRetransmissions);
+            if (r == C_UA) {
+                printf("[llclose][Rx] UA received. Link closed.\n");
+                closeSerialPort();
+                g_txNs = 0; g_rxExpectedNs = 0; g_disc_already_seen = 0;
+                stats_print();
+                return 0;
+            }
+            if (r == -1) {
+                printf("[llclose][Rx] Timeout waiting for UA after DISC. Forcing close.\n");
+                closeSerialPort();
+                g_txNs = 0; g_rxExpectedNs = 0; g_disc_already_seen = 0;
+                stats_print();
+                return -1;
+            }
+            if (r == -2) {
+                printf("[llclose][Rx] I/O error while waiting for UA. Forcing close.\n");
                 closeSerialPort();
                 return -2;
             }
-
-            // Wait for final UA from Tx
-            unsigned char byte;
-            fsm_reset(&fsm);
-            while (1) {
-                int rb = readByteSerialPort(&byte);
-                if (rb < 0) { printf("[llclose][Rx] Read error while waiting for UA.\n"); closeSerialPort(); return -2; }
-                if (rb == 1 && fsm_feed(&fsm, byte)) {
-                    if (fsm.control == C_UA && fsm.address == A_RX) {
-                        stats_frame_recv();
-                        stats_rx_ctrl_seen();
-                        stats_rx_ctrl_ok();
-                        printf("[llclose][Rx] UA received. Link closed.\n");
-                        closeSerialPort();
-                        g_txNs = 0; g_rxExpectedNs = 0; g_disc_already_seen = 0;
-                        stats_print();
-                        return 0;
-                    }
-                    fsm_reset(&fsm);
-                }
-            }
+            // Any other control is unexpected -> force close
+            printf("[llclose][Rx] Unexpected control 0x%02X while waiting for UA. Forcing close.\n", (unsigned)(r & 0xFF));
+            closeSerialPort();
+            g_txNs = 0; g_rxExpectedNs = 0; g_disc_already_seen = 0;
+            stats_print();
+            return -1;
         }
 
 
@@ -439,36 +440,36 @@ int llclose() {
                     // Reply with DISC
                     unsigned char disc[5];
                     buildCtrlFrame(disc, A_RX, C_DISC);
-                    if (sendFrame(disc, 5, C_DISC, NULL, 0, 0) < 0) {
-                        printf("[llclose][Rx] Error sending DISC.\n");
+                    
+                    fsm_reset(&fsm);
+                    int r = sendFrame(disc, 5, C_DISC, &fsm, g_cfg.timeout, g_cfg.nRetransmissions);
+                    if (r == C_UA) {
+                        stats_frame_recv();
+                        stats_rx_ctrl_seen();
+                        stats_rx_ctrl_ok();
+                        printf("[llclose][Rx] UA received. Link closed.\n");
+                        closeSerialPort();
+                        g_txNs = 0; g_rxExpectedNs = 0; g_disc_already_seen = 0;
+                        stats_print();
+                        return 0;
+                    }
+                    if (r == -1) {
+                        printf("[llclose][Rx] Timeout waiting for UA after DISC. Forcing close.\n");
+                        closeSerialPort();
+                        g_txNs = 0; g_rxExpectedNs = 0; g_disc_already_seen = 0;
+                        stats_print();
+                        return -1;
+                    }
+                    if (r == -2) {
+                        printf("[llclose][Rx] I/O error while waiting for UA. Forcing close.\n");
                         closeSerialPort();
                         return -2;
                     }
-
-                    // Now wait for final UA from Tx
-                    fsm_reset(&fsm);
-                    while (1) {
-                        rb = readByteSerialPort(&byte);
-                        if (rb < 0) {
-                            printf("[llclose][Rx] Read error while waiting for UA.\n");
-                            closeSerialPort();
-                            return -2;
-                        }
-                        if (rb == 1 && fsm_feed(&fsm, byte)) {
-                            if (fsm.control == C_UA && fsm.address == A_RX) {
-                                stats_frame_recv();
-                                stats_rx_ctrl_seen();
-                                stats_rx_ctrl_ok();
-                                printf("[llclose][Rx] UA received. Link closed.\n");
-                                closeSerialPort();
-                                g_txNs = 0; g_rxExpectedNs = 0; g_disc_already_seen = 0;
-                                stats_print();
-                                return 0;
-                            }
-                            // Unexpected frame, so reset and keep waiting
-                            fsm_reset(&fsm);
-                        }
-                    }
+                    printf("[llclose][Rx] Unexpected control 0x%02X while waiting for UA. Forcing close.\n", (unsigned)(r & 0xFF));
+                    closeSerialPort();
+                    g_txNs = 0; g_rxExpectedNs = 0; g_disc_already_seen = 0;
+                    stats_print();
+                    return -1;
                 }
                 // Not DISC; reset state machine and continue waiting
                 fsm_reset(&fsm);
