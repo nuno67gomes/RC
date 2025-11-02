@@ -41,10 +41,6 @@ Instructions to Run the Project
     5.3. Check if the file received matches the file sent, even with cable disconnections or with noise
 
 
-TODO:
-  transmissions  3
-  statistics (n de tramas , sucessos , duplicadas, erros, transmission duration)
-  
   no idea
   1. why is it not closing on reciver end 
 
@@ -61,3 +57,6 @@ DONE:
   3. change Receiver response to A_TX
   4. when RX send DISC its a command so change adress to A_RX
   5. verify closing sequence TX disc - RX disc - TX UA
+
+  statistics (n de tramas , sucessos , duplicadas, erros, transmission duration)
+  transmissions  3

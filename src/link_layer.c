@@ -35,7 +35,7 @@ static void buildCtrlFrame(unsigned char *ctrlFrame, unsigned char A, unsigned c
     ctrlFrame[4] = FLAG;
 }
 
-static int sendFrame(const unsigned char *frame, int frameSize, unsigned char sentControl, FrameFSM *fsm, int timeout_s, int maxRetries){
+static int sendFrame(const unsigned char *frame, int frameSize, unsigned char sentControl, FrameFSM *fsm, int timeout_s, int maxRetries){   
     if(!frame || frameSize <=0) return -2;
     int retry = (sentControl == C_SET) || (sentControl == C_DISC) || (sentControl == C_I0)  || (sentControl == C_I1);
     int want_retry = retry && (maxRetries > 0) && (fsm != NULL);
@@ -85,23 +85,23 @@ static int sendFrame(const unsigned char *frame, int frameSize, unsigned char se
 
                 //Handshake
                 if(!isI){
-                    if(sentControl== C_SET){
+                    if(sentControl == C_SET){
                         if(cReceived== C_UA  && aReceived == A_TX ){
                             stats_tx_ctrl_ua_rx();
                             alarm(0); alarmEnabled = 0;
                             return cReceived;
                         }
                         fsm_reset(fsm);
-                    }else if(sentControl== C_DISC){
-                        if((cReceived== C_DISC && aReceived == A_RX) || (cReceived== C_UA && aReceived == A_TX)){
-                            stats_tx_ctrl_ua_rx();
+                    }else if(sentControl == C_DISC){
+                        if((cReceived == C_DISC && aReceived == A_RX) || (cReceived == C_UA && aReceived == A_RX)){
+                            if (cReceived == C_DISC && aReceived == A_RX) stats_tx_ctrl_ua_rx(); 
                             if (cReceived == C_UA) stats_tx_ctrl_ua_rx();
                             alarm(0); alarmEnabled = 0;
                             return cReceived;
                         }
                         fsm_reset(fsm);
                     }else {
-                        if(cReceived== C_UA  && aReceived == A_TX){
+                        if(cReceived == C_UA  && aReceived == A_TX){
                             stats_tx_ctrl_ua_rx();
                             alarm(0); alarmEnabled = 0;
                             return cReceived;
@@ -376,16 +376,6 @@ int llclose() {
             stats_print();
             return 0;
         }
-
-        if (r == C_UA) {
-            // Some peers may directly reply UA; accept and close
-            printf("[llclose][Tx] UA received after DISC. Link closed.\n");
-            closeSerialPort();
-            g_txNs = 0; g_rxExpectedNs = 0; g_disc_already_seen = 0;
-            stats_print();
-            return 0;
-        }
-
         if (r == -2) {
             printf("[llclose][Tx] I/O error during close.\n");
             closeSerialPort();
