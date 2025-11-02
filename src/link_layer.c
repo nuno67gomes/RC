@@ -64,7 +64,7 @@ static int sendFrame(const unsigned char *frame, int frameSize, unsigned char se
     alarmCount = 0;
 
     for (int tries = 0; tries < maxRetries; ++tries) {
-        printf("[DEBUG] Sending C=0x%02X, try #%d\n", sentControl, tries + 1);
+        //printf("[DEBUG] Sending C=0x%02X, try #%d\n", sentControl, tries + 1);
         if (writeBytesSerialPort(frame, frameSize) < 0) return -2;
         
         stats_frame_sent();
@@ -290,7 +290,7 @@ static int sendRR(unsigned char expectNextNr) {
 static int sendREJ(unsigned char expectNextNr) {
     unsigned char rejC = (expectNextNr == 0) ? C_REJ0 : C_REJ1;
     unsigned char f[5]; buildCtrlFrame(f, A_TX, rejC);
-    printf("[DEBUG] Reject sent \n");
+    //printf("[DEBUG] Reject sent \n");
     return sendFrame(f, 5, rejC, NULL, 0, 0);
 }
 

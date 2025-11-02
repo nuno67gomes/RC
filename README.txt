@@ -40,23 +40,3 @@ Instructions to Run the Project
     5.2. Quickly move to the cable program console and press 0 for unplugging the cable, 2 to add noise, and 1 to normal
     5.3. Check if the file received matches the file sent, even with cable disconnections or with noise
 
-
-  no idea
-  1. why is it not closing on reciver end 
-
-
-DONE:
-  apllication_layer
-  1. change to little endian of the fileSze info size indicator 
-  2. apllication layer when reciving END ceck match byteSTART == byteEND == byteReceived
-  3. remove seq number from apllication layer
-  4. not saving START file name correctly
-
-  link_layer
-  2. verify when reciving response ignore if not RR or REJ
-  3. change Receiver response to A_TX
-  4. when RX send DISC its a command so change adress to A_RX
-  5. verify closing sequence TX disc - RX disc - TX UA
-
-  statistics (n de tramas , sucessos , duplicadas, erros, transmission duration)
-  transmissions  3

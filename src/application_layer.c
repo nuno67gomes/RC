@@ -294,6 +294,13 @@ void applicationLayer(const char *serialPort, const char *role, int baudRate, in
                     llclose(); return;
                 }
 
+                // File names match
+                if (strcmp(name_chk, name_from_start) != 0) {
+                    fprintf(stderr, "[APP][Rx] ERROR: END name \"%s\" != START name \"%s\"\n", name_chk, name_from_start);
+                    if (out_fd >= 0) close(out_fd);
+                    llclose(); return;
+                }
+
                 // OUT FILE PROBLEM
                 if (out_fd >= 0) {
                     if (fsync(out_fd) != 0) perror("[APP][Rx] fsync");
