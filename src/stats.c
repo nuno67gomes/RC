@@ -4,6 +4,7 @@
 #include <time.h>
 
 static LlStats g_stats;
+static StatsResult g_result = STATS_RES_UNKNOWN;
 
 static double diff_s(struct timespec a, struct timespec b) {
     long s   = b.tv_sec  - a.tv_sec;
@@ -16,6 +17,7 @@ static double diff_s(struct timespec a, struct timespec b) {
 void stats_start(LinkLayerRole role) {
     memset(&g_stats, 0, sizeof(g_stats));
     g_stats.role = role;
+    g_result = STATS_RES_UNKNOWN; 
     clock_gettime(CLOCK_MONOTONIC, &g_stats.t_start);
 }
 void stats_stop(void) { clock_gettime(CLOCK_MONOTONIC, &g_stats.t_end); }
@@ -27,7 +29,12 @@ void stats_print(void) {
 
     printf("\n=========== STATISTICS ==========\n");
     printf("Role: %s\n", (g_stats.role == LlTx ? "Transmitter" : "Receiver"));
-    printf("Elapsed: %.3f s\n\n", elapsed);
+    printf("Elapsed: %.3f s\n", elapsed);
+    printf("Result: ");
+    if (g_result == STATS_RES_SUCCESS) printf("SUCCESS\n\n");
+    else if (g_result == STATS_RES_INCOMPLETE) printf("FAILED (incomplete)\n\n");
+    else printf("UNKNOWN\n\n");
+
 
     if (g_stats.role == LlTx) {
         printf("-- Transmitter --\n");
@@ -66,6 +73,8 @@ void stats_print(void) {
     }
     printf("=================================\n\n");
 }
+
+void stats_set_result(StatsResult r) { g_result = r; }
 
 // generic
 void stats_frame_sent(void){ g_stats.frames_sent_total++; }

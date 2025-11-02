@@ -1,6 +1,5 @@
 // Link layer protocol implementation
 
-
 #define _POSIX_SOURCE 1 // POSIX compliant source
 
 #include <stdio.h>
@@ -378,11 +377,13 @@ int llclose() {
         }
         if (r == -2) {
             printf("[llclose][Tx] I/O error during close.\n");
+            stats_print();
             closeSerialPort();
             return -2;
         }
 
         printf("[llclose][Tx] Timeout or unexpected control 0x%02X during close.\n", r & 0xFF);
+        stats_print(); 
         closeSerialPort();
         return -1;
     }

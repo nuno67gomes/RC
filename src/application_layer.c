@@ -2,6 +2,7 @@
 
 #include "application_layer.h"
 #include "link_layer.h"
+#include "stats.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -159,6 +160,7 @@ void applicationLayer(const char *serialPort, const char *role, int baudRate, in
         // SEND START
         if (sendStartEnd(CTRL_START, filename, fsize) != 0) { 
             printf("[APP][Tx] failed to send START\n");
+            stats_set_result(STATS_RES_INCOMPLETE);
             close(fd);
             llclose(); return;
         }
@@ -171,17 +173,25 @@ void applicationLayer(const char *serialPort, const char *role, int baudRate, in
         while ((rd = read(fd, chunk, sizeof(chunk))) > 0) {
             if (sendDataPacket(chunk, (uint16_t)rd) < 0) {
                 printf("[APP][Tx] failed to send DATA \n");
+                stats_set_result(STATS_RES_INCOMPLETE);
                 close(fd);
                 llclose(); return;
             }
             sent += rd;
         }
 
-        if (rd < 0) { perror("[APP][Tx] read"); close(fd); llclose(); return; }
+        if (rd < 0) { 
+            perror("[APP][Tx] read"); 
+            stats_set_result(STATS_RES_INCOMPLETE);
+            close(fd); 
+            llclose(); 
+            return; 
+        }
 
         // SEND END
         if (sendStartEnd(CTRL_END, filename, fsize) != 0) {
             printf("[APP][Tx] failed to send END\n");
+            stats_set_result(STATS_RES_INCOMPLETE);
             close(fd);
             llclose(); return;
         }
@@ -207,6 +217,7 @@ void applicationLayer(const char *serialPort, const char *role, int baudRate, in
             int n = llread(packet);
             if (n < 0) {
                 printf("[APP][Rx] llread error (%d)\n", n);
+                stats_set_result(STATS_RES_INCOMPLETE);
                 if (out_fd >= 0) close(out_fd);
                 llclose(); return;
             }
@@ -222,6 +233,7 @@ void applicationLayer(const char *serialPort, const char *role, int baudRate, in
                 // PARSE START
                 if (parseStartEnd(packet, (size_t)n, &size_tmp, name_tmp, sizeof(name_tmp)) != 0) {
                     printf("[APP][Rx] malformed START\n");
+                    stats_set_result(STATS_RES_INCOMPLETE);
                     if (out_fd >= 0) close(out_fd);
                     llclose(); return;
                 }
@@ -234,6 +246,7 @@ void applicationLayer(const char *serialPort, const char *role, int baudRate, in
                 out_fd = open(target, O_CREAT | O_TRUNC | O_WRONLY, 0644);
                 if (out_fd < 0) {
                     perror("[APP][Rx] open(out)");
+                    stats_set_result(STATS_RES_INCOMPLETE);
                     llclose(); return;
                 }
 
@@ -253,6 +266,7 @@ void applicationLayer(const char *serialPort, const char *role, int baudRate, in
                 // PARSE DATA
                 if (parseDataPacket(packet, (size_t)n, &payload, &len) != 0) {
                     printf("[APP][Rx] malformed DATA\n");
+                    stats_set_result(STATS_RES_INCOMPLETE);
                     if (out_fd >= 0) close(out_fd);
                     llclose(); return;
                 }
@@ -261,6 +275,7 @@ void applicationLayer(const char *serialPort, const char *role, int baudRate, in
                 ssize_t wr = write(out_fd, payload, len);
                 if (wr != (ssize_t)len) {
                     perror("[APP][Rx] write");
+                    stats_set_result(STATS_RES_INCOMPLETE);
                     if (out_fd >= 0) close(out_fd);
                     llclose(); return;
                 }
@@ -268,6 +283,7 @@ void applicationLayer(const char *serialPort, const char *role, int baudRate, in
 
                 if (expected_size && received > expected_size) {
                     printf("[APP][Rx] ERROR: received more bytes (%lld) than expected (%lld)\n", (long long)received, (long long)expected_size);
+                    stats_set_result(STATS_RES_INCOMPLETE);
                     if (out_fd >= 0) close(out_fd);
                     llclose(); return;
                 }
@@ -283,6 +299,7 @@ void applicationLayer(const char *serialPort, const char *role, int baudRate, in
                 // PARSE END
                 if (parseStartEnd(packet, (size_t)n, &size_chk, name_chk, sizeof(name_chk)) != 0) {
                     printf("[APP][Rx] malformed END\n");
+                    stats_set_result(STATS_RES_INCOMPLETE);
                     if (out_fd >= 0) close(out_fd);
                     llclose(); return;
                 }
@@ -290,6 +307,7 @@ void applicationLayer(const char *serialPort, const char *role, int baudRate, in
                 // END size matches START size
                 if (size_chk != expected_size) {
                     printf("[APP][Rx] ERROR: END size (%lld) != START size (%lld)\n", (long long)size_chk, (long long)expected_size);
+                    stats_set_result(STATS_RES_INCOMPLETE);
                     if (out_fd >= 0) close(out_fd);
                     llclose(); return;
                 }
@@ -297,6 +315,7 @@ void applicationLayer(const char *serialPort, const char *role, int baudRate, in
                 // File names match
                 if (strcmp(name_chk, name_from_start) != 0) {
                     fprintf(stderr, "[APP][Rx] ERROR: END name \"%s\" != START name \"%s\"\n", name_chk, name_from_start);
+                    stats_set_result(STATS_RES_INCOMPLETE);
                     if (out_fd >= 0) close(out_fd);
                     llclose(); return;
                 }
@@ -309,6 +328,7 @@ void applicationLayer(const char *serialPort, const char *role, int baudRate, in
                 }
 
                 printf("[APP][Rx] END ok. Received %lld / %lld bytes.\n",(long long)received, (long long)expected_size);
+                stats_set_result(STATS_RES_SUCCESS); 
                 llclose();
                 return;
             }

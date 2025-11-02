@@ -4,6 +4,12 @@
 #include <time.h>
 #include "link_layer.h" 
 
+typedef enum {
+    STATS_RES_UNKNOWN,
+    STATS_RES_SUCCESS,
+    STATS_RES_INCOMPLETE
+} StatsResult;
+
 typedef struct {
     // Common
     unsigned long frames_sent_total;
@@ -33,6 +39,8 @@ typedef struct {
     struct timespec t_start, t_end;
     LinkLayerRole role;
 } LlStats;
+
+void stats_set_result(StatsResult r);
 
 // lifecycle
 void stats_start(LinkLayerRole role);
