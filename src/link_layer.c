@@ -13,11 +13,7 @@
 #include "state_machine.h"
 #include "stats.h"
 
-#define INFO_MAX 1024
-#define FRAME_OVERHEAD 5 // FLAG,A,C,BCC1,FLAG
-#define STUFF_GROWTH_MAX  2 // worst-case expansion factor
-#define STUFFED_INFO_MAX (STUFF_GROWTH_MAX * (INFO_MAX+1)) // +1=BCC2
-#define FRAME_MAX (FRAME_OVERHEAD + STUFFED_INFO_MAX)
+#include "protocol_limits.h"
 
 //state after llopen()
 static LinkLayer g_cfg;

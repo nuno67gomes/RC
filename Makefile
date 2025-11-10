@@ -50,3 +50,13 @@ clean:
 	rm -f $(BIN)/main
 	rm -f $(BIN)/cable
 	rm -f $(RX_FILE)
+
+.PHONY: run_tx_rx
+run_tx_rx: main
+	@echo "Starting RX and TX in parallel..."
+	./$(BIN)/main $(RX_SERIAL_PORT) $(BAUD_RATE) rx $(RX_FILE) & \
+	rx_pid=$$!; \
+	sleep 0.2; \
+	./$(BIN)/main $(TX_SERIAL_PORT) $(BAUD_RATE) tx $(TX_FILE) & \
+	tx_pid=$$!; \
+	wait $$rx_pid $$tx_pid

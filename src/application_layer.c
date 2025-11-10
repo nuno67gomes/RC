@@ -10,7 +10,7 @@
 #include <stdlib.h>
 #include <sys/stat.h>
 #include <sys/types.h>
-#include <stddef.h>
+#include "protocol_limits.h"
 
 #include <fcntl.h>   // open(), O_RDONLY, etc.
 #include <unistd.h> 
@@ -22,20 +22,16 @@
 #define CTRL_START 0x02
 #define CTRL_END 0x03
 
-#define APP_MAX_INFO_LEN 1024
-#define APP_DATA_HDR_SIZE 3 
-#define APP_CHUNK (APP_MAX_INFO_LEN - APP_DATA_HDR_SIZE)
-
 static void hexdump(const char *tag, const unsigned char *b, size_t n){
     if (tag) printf("%s (%zu): ", tag, n);
     for (size_t i = 0; i < n; ++i) printf("%02X ", b[i]);
     putchar('\n');
 }
 
+//big-endian
 static void put_u64_be(uint8_t out[8], uint64_t v){
   for (int i=7; i>=0; --i) { out[i] = (uint8_t)(v & 0xFF); v >>= 8; }
 }
-
 static uint64_t get_u64_be(const uint8_t in[8]){
   uint64_t v=0; for (int i=0;i<8;++i){ v=(v<<8)|in[i]; } return v;
 }
@@ -49,6 +45,9 @@ static int buildStartEnd(unsigned char *out, uint8_t ctrl, const char *fname, of
 
     size_t nameLen = strlen(fname);
     if (nameLen > 255) nameLen = 255;
+
+    size_t need = 1 + (1+1+8) + (1+1+nameLen);
+    if (need > APP_MAX_INFO_LEN){printf("hhhhhhhaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!!!!!!!!!!!!!!!!!!!!!!!!!\n"); return -1;}
 
     size_t i = 0;
     out[i++] = ctrl;
@@ -84,7 +83,7 @@ static int parseStartEnd(const unsigned char *in, size_t inLen, off_t *outSize, 
     int haveSize = 0, haveName = 0;
     while (i + 2 <= inLen) {
         uint8_t T = in[i++], L = in[i++];
-        if (i + L > inLen) break;
+        if (i + L > inLen) return -1;
 
         if (T == T_FILE_SIZE) {
             if (L != 8) return -1;

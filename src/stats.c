@@ -51,7 +51,7 @@ void stats_print(void) {
         printf("Control retransmissions:%lu\n", g_stats.ctrl_frames_retr);
 
         printf("\n");
-        if (g_stats.i_frames_sent) {
+        if (elapsed > 0.0 && g_stats.i_frames_sent) {
             double succ = (double)g_stats.i_frames_acked / (double)g_stats.i_frames_sent * 100.0;
             double fps_acked  = (elapsed > 0.0) ? (double)g_stats.i_frames_acked / elapsed : 0.0;
             double fps = (elapsed > 0.0) ? (double)g_stats.frames_sent_total / elapsed : 0.0;
